@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Карта участков — Москва и Московская область</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+
+<!--
+  ====================== НАСТРОЙКА (один раз) ======================
+  1. Создайте Google Таблицу и импортируйте в неё файл «Точки_для_Google_Sheets.csv»
+     (Файл → Импорт → Загрузка → выбрать файл → «Заменить текущий лист»).
+  2. Файл → Поделиться → Опубликовать в интернете (Publish to web).
+     - Выберите нужный лист.
+     - Формат: CSV.
+     - Нажмите «Опубликовать».
+  3. Скопируйте выданную ссылку (она выглядит как:
+     https://docs.google.com/spreadsheets/d/e/2PACX-.../pub?output=csv )
+  4. Вставьте её вместо строки ниже: const SHEET_CSV_URL = "ВСТАВЬТЕ_ССЫЛКУ_СЮДА";
+  5. Сохраните файл и загрузите его один раз на любой статичный хостинг
+     (например, Netlify Drop) — дальше обновлять сам файл не нужно.
+  ====================================================================
+-->
+
+<style>
+  :root{
+    --bg:#0f1115; --panel:#161a22; --panel2:#1d2230; --border:#2a3040;
+    --text:#e8ebf2; --muted:#9aa3b5; --accent:#4f8dfd; --accent2:#ffb454;
+    --cat1:#4f8dfd; --cat2:#37c47a; --cat3:#ffb454; --cat4:#e05fa0;
+  }
+  *{box-sizing:border-box;}
+  html,body{height:100%;margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;background:var(--bg);color:var(--text);}
+  #app{display:flex;height:100vh;width:100vw;}
+  #sidebar{
+    width:380px;min-width:300px;max-width:420px;height:100%;
+    background:var(--panel);border-right:1px solid var(--border);
+    display:flex;flex-direction:column;overflow:hidden;
+  }
+  #header{padding:16px 16px 10px;border-bottom:1px solid var(--border);}
+  #header h1{font-size:16px;margin:0 0 4px;font-weight:700;}
+  #header p{margin:0;font-size:12px;color:var(--muted);}
+  #urlwarning{
+    margin:10px 16px 0;padding:8px 10px;border-radius:8px;font-size:11.5px;line-height:1.4;
+    background:rgba(255,180,84,.12);border:1px solid rgba(255,180,84,.4);color:var(--accent2);display:none;
+  }
+  #search{
+    margin:12px 16px 8px;padding:9px 12px;border-radius:8px;border:1px solid var(--border);
+    background:var(--panel2);color:var(--text);font-size:13px;width:calc(100% - 32px);
+  }
+  #search:focus{outline:none;border-color:var(--accent);}
+  #filters{display:flex;flex-wrap:wrap;gap:6px;margin:0 16px 12px;}
+  .filter-chip{
+    font-size:11px;padding:5px 9px;border-radius:999px;border:1px solid var(--border);
+    background:var(--panel2);color:var(--muted);cursor:pointer;user-select:none;white-space:nowrap;
+  }
+  .filter-chip.active{color:#0f1115;font-weight:600;border-color:transparent;}
+  .filter-chip[data-cat="1"].active{background:var(--cat1);}
+  .filter-chip[data-cat="2"].active{background:var(--cat2);}
+  .filter-chip[data-cat="3"].active{background:var(--cat3);}
+  .filter-chip[data-cat="4"].active{background:var(--cat4);}
+  #count{font-size:11px;color:var(--muted);margin:0 16px 8px;}
+  #list{flex:1;overflow-y:auto;padding:0 10px 16px;}
+  .card{
+    background:var(--panel2);border:1px solid var(--border);border-radius:10px;
+    padding:10px 12px;margin:0 6px 8px;cursor:pointer;transition:border-color .15s;
+  }
+  .card:hover{border-color:var(--accent);}
+  .card.selected{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent);}
+  .card-top{display:flex;align-items:flex-start;gap:8px;}
+  .badge{
+    flex:none;width:22px;height:22px;border-radius:50%;display:flex;align-items:center;justify-content:center;
+    font-size:11px;font-weight:700;color:#0f1115;margin-top:1px;
+  }
+  .card-title{font-size:13px;font-weight:600;line-height:1.3;}
+  .card-addr{font-size:11.5px;color:var(--muted);margin-top:3px;}
+  .card-meta{display:flex;gap:10px;margin-top:6px;font-size:11.5px;flex-wrap:wrap;}
+  .card-meta span{color:var(--muted);}
+  .card-meta b{color:var(--text);font-weight:600;}
+  .approx-tag{font-size:10px;color:var(--accent2);margin-top:4px;}
+  #map{flex:1;height:100%;}
+  .leaflet-popup-content-wrapper{background:var(--panel);color:var(--text);border-radius:10px;}
+  .leaflet-popup-tip{background:var(--panel);}
+  .popup{max-width:280px;font-size:13px;}
+  .popup h3{margin:0 0 6px;font-size:14px;}
+  .popup .addr{color:var(--muted);font-size:12px;margin-bottom:6px;}
+  .popup .row{margin:3px 0;font-size:12px;}
+  .popup .row b{color:var(--accent2);}
+  .popup .desc{margin-top:6px;font-size:12px;color:#cfd4e0;line-height:1.4;white-space:pre-line;}
+  .popup a.ylink{display:inline-block;margin-top:8px;font-size:12px;color:var(--accent);text-decoration:none;}
+  .popup a.ylink:hover{text-decoration:underline;}
+  .popup .approx{font-size:11px;color:var(--accent2);margin-top:6px;}
+  .num-icon{
+    background:var(--accent);color:#0f1115;border-radius:50%;width:26px;height:26px;
+    display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:800;
+    border:2px solid #0f1115;box-shadow:0 1px 4px rgba(0,0,0,.5);
+  }
+  @media (max-width:760px){
+    #app{flex-direction:column;}
+    #sidebar{width:100%;max-width:none;height:46%;border-right:none;border-bottom:1px solid var(--border);}
+    #map{height:54%;}
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="sidebar">
+    <div id="header">
+      <h1>Карта участков — Москва и МО</h1>
+      <p id="subtitle">Загрузка данных из Google Таблицы…</p>
+    </div>
+    <div id="urlwarning">⚠ Данные не загружены. Откройте файл в текстовом редакторе и вставьте ссылку на опубликованную Google Таблицу вместо <b>ВСТАВЬТЕ_ССЫЛКУ_СЮДА</b> в начале файла (переменная <code>SHEET_CSV_URL</code>). Инструкция — в комментарии в начале файла.</div>
+    <input id="search" type="text" placeholder="Поиск по названию, адресу, кадастровому номеру…">
+    <div id="filters">
+      <div class="filter-chip active" data-cat="1">Москва: инвест-проекты</div>
+      <div class="filter-chip active" data-cat="2">МО: инвест-проекты</div>
+      <div class="filter-chip active" data-cat="3">Одинцовский р-н (ИЖС)</div>
+      <div class="filter-chip active" data-cat="4">Москва (через Лолиту/Дмитрия)</div>
+    </div>
+    <div id="count"></div>
+    <div id="list"></div>
+  </div>
+  <div id="map"></div>
+</div>
+
+<script>
+// ====== ВСТАВЬТЕ ССЫЛКУ НА ОПУБЛИКОВАННУЮ GOOGLE-ТАБЛИЦУ (формат CSV) СЮДА ======
+const SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRNwPaqHv7a2aa3f9rUxoKDksQNiJnwxA37Gi2kou3RaTgHSAG1kDig7WCKDh5g2LSe6NxDgkFyRTf_/pub?gid=323436123&single=true&output=csv";
+// =================================================================================
+
+let DATA = [];
+
+const CAT_META = {
+  1: {name:"Москва: инвест-проекты", color:"#4f8dfd"},
+  2: {name:"МО: инвест-проекты", color:"#37c47a"},
+  3: {name:"Одинцовский р-н (ИЖС)", color:"#ffb454"},
+  4: {name:"Москва (через Лолиту/Дмитрия)", color:"#e05fa0"},
+};
+
+const map = L.map('map', {zoomControl:true}).setView([55.75, 37.4], 9);
+L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+  attribution: '&copy; OpenStreetMap contributors &copy; CARTO',
+  subdomains: 'abcd',
+  maxZoom: 19
+}).addTo(map);
+
+function makeIcon(cat){
+  const meta = CAT_META[cat] || CAT_META[1];
+  return L.divIcon({
+    className: '',
+    html: `<div class="num-icon" style="background:${meta.color}"></div>`,
+    iconSize: [26,26],
+    iconAnchor: [13,13],
+    popupAnchor: [0,-13]
+  });
+}
+
+const markers = {};
+const layerGroup = L.layerGroup().addTo(map);
+
+function popupHtml(p){
+  let html = `<div class="popup">
+    <h3>${p.title}</h3>
+    <div class="addr">${p.address}</div>`;
+  if(p.area) html += `<div class="row"><b>Площадь:</b> ${p.area}</div>`;
+  if(p.price) html += `<div class="row"><b>Цена:</b> ${p.price}</div>`;
+  if(p.details) html += `<div class="row">${p.details}</div>`;
+  if(p.desc) html += `<div class="desc">${p.desc}</div>`;
+  if(p.link) html += `<a class="ylink" href="${p.link}" target="_blank" rel="noopener">Открыть в Яндекс.Картах →</a>`;
+  if(p.approx) html += `<div class="approx">⚠ Точные координаты неизвестны — метка приблизительная</div>`;
+  html += `</div>`;
+  return html;
+}
+
+const listEl = document.getElementById('list');
+const countEl = document.getElementById('count');
+const searchEl = document.getElementById('search');
+const subtitleEl = document.getElementById('subtitle');
+let activeCats = new Set([1,2,3,4]);
+let selectedId = null;
+
+function renderList(){
+  const q = searchEl.value.trim().toLowerCase();
+  listEl.innerHTML = '';
+  let shown = 0;
+  DATA.forEach(p => {
+    if(!activeCats.has(p.cat)) { toggleMarker(p.id,false); return; }
+    const hay = (p.title+' '+p.address+' '+(p.details||'')+' '+(p.desc||'')).toLowerCase();
+    if(q && !hay.includes(q)) { toggleMarker(p.id,false); return; }
+    toggleMarker(p.id,true);
+    shown++;
+    const meta = CAT_META[p.cat] || CAT_META[1];
+    const card = document.createElement('div');
+    card.className = 'card' + (p.id===selectedId ? ' selected':'');
+    card.dataset.id = p.id;
+    card.innerHTML = `
+      <div class="card-top">
+        <div class="badge" style="background:${meta.color}">${p.id}</div>
+        <div>
+          <div class="card-title">${p.title}</div>
+          <div class="card-addr">${p.address}</div>
+        </div>
+      </div>
+      <div class="card-meta">
+        ${p.area ? `<span><b>${p.area}</b></span>`:''}
+        ${p.price ? `<span><b>${p.price}</b></span>`:''}
+      </div>
+      ${p.approx ? '<div class="approx-tag">⚠ приблизительное расположение</div>' : ''}
+    `;
+    card.addEventListener('click', () => focusPoint(p.id));
+    listEl.appendChild(card);
+  });
+  countEl.textContent = `Показано: ${shown} из ${DATA.length}`;
+}
+
+function toggleMarker(id, show){
+  const m = markers[id];
+  if(!m) return;
+  if(show && !layerGroup.hasLayer(m)) layerGroup.addLayer(m);
+  if(!show && layerGroup.hasLayer(m)) layerGroup.removeLayer(m);
+}
+
+function focusPoint(id){
+  const p = DATA.find(d=>d.id===id);
+  if(!p) return;
+  selectedId = id;
+  map.flyTo([p.lat,p.lon], 13, {duration:0.6});
+  markers[id].openPopup();
+  renderList();
+}
+
+document.querySelectorAll('.filter-chip').forEach(chip => {
+  chip.addEventListener('click', () => {
+    const cat = parseInt(chip.dataset.cat);
+    if(activeCats.has(cat)){ activeCats.delete(cat); chip.classList.remove('active'); }
+    else { activeCats.add(cat); chip.classList.add('active'); }
+    renderList();
+  });
+});
+
+searchEl.addEventListener('input', renderList);
+
+map.on('popupopen', (e) => {
+  const ll = e.popup.getLatLng();
+  const found = DATA.find(d => Math.abs(d.lat-ll.lat)<1e-9 && Math.abs(d.lon-ll.lng)<1e-9);
+  if(found){ selectedId = found.id; renderList(); }
+});
+
+// ---------- Загрузка и парсинг CSV из Google Таблицы ----------
+function toBool(v){
+  if (v === undefined || v === null) return false;
+  const s = String(v).trim().toLowerCase();
+  return s === 'true' || s === '1' || s === 'да';
+}
+function clean(v){
+  if (v === undefined || v === null) return null;
+  const s = String(v).trim();
+  if (s === '' || s.toLowerCase() === 'nan') return null;
+  return s;
+}
+
+function loadData(){
+  if(!SHEET_CSV_URL || SHEET_CSV_URL.indexOf('ВСТАВЬТЕ') !== -1){
+    document.getElementById('urlwarning').style.display = 'block';
+    countEl.textContent = 'Ссылка на таблицу не настроена';
+    return;
+  }
+  countEl.textContent = 'Загрузка данных из Google Таблицы…';
+  Papa.parse(SHEET_CSV_URL, {
+    download: true,
+    header: true,
+    skipEmptyLines: true,
+    complete: function(results){
+      try{
+        DATA = results.data.map(r => ({
+          id: parseInt(r['ID']),
+          cat: parseInt(r['Категория (1-4)']),
+          title: clean(r['Заголовок']),
+          address: clean(r['Адрес']),
+          area: clean(r['Площадь']),
+          price: clean(r['Цена']),
+          details: clean(r['Детали (к/н, статус)']),
+          desc: clean(r['Описание']),
+          link: clean(r['Ссылка (Яндекс.Карты)']),
+          lat: parseFloat(r['Широта (lat)']),
+          lon: parseFloat(r['Долгота (lon)']),
+          approx: toBool(r['Приблизительно?']),
+        })).filter(p => p.id && !isNaN(p.lat) && !isNaN(p.lon));
+
+        DATA.forEach(p => {
+          const marker = L.marker([p.lat, p.lon], {icon: makeIcon(p.cat)});
+          marker.bindPopup(popupHtml(p));
+          marker.addTo(layerGroup);
+          markers[p.id] = marker;
+        });
+        subtitleEl.textContent = DATA.length + ' объектов · данные из Google Таблицы';
+        renderList();
+      }catch(err){
+        countEl.textContent = 'Ошибка обработки данных: ' + err.message;
+        console.error(err);
+      }
+    },
+    error: function(err){
+      document.getElementById('urlwarning').style.display = 'block';
+      document.getElementById('urlwarning').innerHTML =
+        '⚠ Не удалось загрузить данные из Google Таблицы. Проверьте, что таблица опубликована (Файл → Поделиться → Опубликовать в интернете → CSV) и ссылка вставлена верно.<br>Ошибка: ' + err;
+      countEl.textContent = 'Ошибка загрузки';
+      console.error('Ошибка загрузки CSV', err);
+    }
+  });
+}
+
+loadData();
+</script>
+</body>
+</html>
